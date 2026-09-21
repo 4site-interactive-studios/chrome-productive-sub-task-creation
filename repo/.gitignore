@@ -1,0 +1,10 @@
+# Phase 0 scratch. The ledger is the list of task ids the probe created, which is how cleanup
+# knows what it may delete; the spec is a large download kept for follow-up greps.
+scripts/.phase0-ledger.json
+scripts/.phase0-spec.json
+
+# The extension's private signing key, once there is one. It pairs with the manifest "key" field.
+key.pem
+
+# macOS folder metadata
+.DS_Store

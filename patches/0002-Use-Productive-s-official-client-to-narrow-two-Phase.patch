@@ -1,0 +1,124 @@
+From 76706a78172da164d4d366b3947be637579bb9ce Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 21 Sep 2026 19:32:34 +0000
+Subject: [PATCH 2/2] Use Productive's official client to narrow two Phase 0
+ unknowns
+
+productiveio/api_client is a thin json_api_client wrapper with no field
+schemas, so it cannot answer the subscriber question. It does settle some
+context around it:
+
+- Task declares no associations, while Invoice and Deal declare has_one.
+  A create through that gem therefore sends project_id and friends as plain
+  attributes, so the flat form the docs describe is one the vendor's own
+  client depends on. The matrix still tests both forms, since this is
+  inference from structure rather than a captured request.
+- There is no subscription resource, only organization_subscription for
+  billing. A 404 from /subscriptions is now labeled as the expected answer
+  instead of reading like a broken probe.
+- An Activity resource exists, so /activities is real. The matrix now tries
+  three ways to filter activities to a single created task. If one works,
+  re-runs get a machine-readable read on who the server thinks it notified
+  rather than depending on someone checking their inbox.
+
+Base URL and both auth headers are confirmed first-party by that client's
+configuration and match what the script already sends.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WdMzEbc5914o6SVXUuSrLP
+---
+ PHASE0.md          | 24 ++++++++++++++++++++++++
+ scripts/phase0.mjs | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 52 insertions(+)
+
+diff --git a/PHASE0.md b/PHASE0.md
+index 2781c9b..624aac4 100644
+--- a/PHASE0.md
++++ b/PHASE0.md
+@@ -93,6 +93,30 @@ attributes, while two independent public clients build the same fields as JSON:A
+ One of those is wrong and a 201 will not tell us which, since an unrecognized field is dropped
+ silently. R9 is what makes the answer legible.
+ 
++## What the first-party code already tells us
++
++Productive publishes its own Ruby client at https://github.com/productiveio/api_client. It is a
++thin wrapper over [json_api_client](https://github.com/chingor13/json_api_client) with no field
++schemas, so it does not answer the subscriber question. Three things in it are still useful:
++
++1. **The flat attribute form is real.** Resources like `Invoice` and `Deal` declare associations
++   (`has_one :company`), but `Task` declares none at all. With no associations, a create through
++   that gem sends `project_id`, `task_list_id` and the rest as plain attributes. Either the API
++   accepts flat `*_id` attributes on tasks or the official client cannot create one. That is
++   inference from the gem's structure rather than from a captured request, which is why the matrix
++   still tests both forms, but it does mean the docs are not describing a form nobody uses.
++2. **There is no subscription resource.** The client lists `organization_subscription`, which is
++   billing, and nothing else subscriber-shaped. So a 404 from `/subscriptions` during the probe is
++   the expected answer, and task subscribers are most likely read through the people filter or an
++   include on the task.
++3. **`/activities` is a real endpoint.** The client declares an `Activity` resource, so the run now
++   tries three ways of filtering activities down to a single task. If one works, future re-runs get
++   a machine-readable second opinion on who the server thinks it told, instead of depending on
++   someone checking their mail.
++
++Base URL, `X-Auth-Token` and `X-Organization-Id` are all confirmed first-party by that client's
++configuration, and match what the script sends.
++
+ ## Then what
+ 
+ If any row keeps the subscriber list clean and the recipient confirms no notification, that shape
+diff --git a/scripts/phase0.mjs b/scripts/phase0.mjs
+index c4f9fae..a3c61d6 100644
+--- a/scripts/phase0.mjs
++++ b/scripts/phase0.mjs
+@@ -472,6 +472,8 @@ async function cmdRead(taskId) {
+   const all = await getAll("/people", {});
+   const totalPeople = all.items.length;
+   console.log("\n===== R3: subscribable_type probes (org has " + totalPeople + " people) =====");
++  console.log("  productiveio/api_client declares no subscription resource, only organization_subscription");
++  console.log("  (billing). So a 404 on /subscriptions is the expected answer, not a broken probe.");
+   const subRows = await probeSubscribableType(taskId, totalPeople);
+   for (const row of subRows) {
+     console.log("  " + (row.path + " " + row.type).padEnd(28) + " " + String(row.status).padEnd(4) +
+@@ -568,6 +570,29 @@ const ROWS = [
+   { id: "R10", form: null, parent: "nested", subs: ["me"], note: "Q6 sub-task of a sub-task?" }
+ ];
+ 
++// /activities is a real endpoint: productiveio/api_client declares an Activity resource. If it can
++// be filtered down to one task, we get a second, re-runnable read on who the server thinks it told,
++// instead of relying on a human checking their mail every time.
++async function probeActivities(taskId) {
++  console.log("\n===== P8b: can /activities be filtered to one task? =====");
++  const attempts = [
++    { "filter[item_id]": String(taskId), "filter[item_type]": "task" },
++    { "filter[item_id]": String(taskId) },
++    { "filter[task_id]": String(taskId) }
++  ];
++  for (const params of attempts) {
++    const qs = new URLSearchParams({ ...params, "page[size]": "20" });
++    const r = await api("GET", "/activities?" + qs.toString());
++    const items = r.status === 200 && r.doc ? (r.doc.data || []) : [];
++    console.log("  " + JSON.stringify(params) + " -> " + r.status + " n=" + items.length +
++      (r.status === 200 ? "" : "  " + errorText(r).slice(0, 80)));
++    if (items.length) {
++      console.log("    attribute keys: " + Object.keys(items[0].attributes || {}).join(", "));
++      console.log("    relationship keys: " + Object.keys(items[0].relationships || {}).join(", "));
++    }
++  }
++}
++
+ async function cmdMatrix() {
+   requireToken();
+   const parentId = flag("parent");
+@@ -711,6 +736,9 @@ async function cmdMatrix() {
+     }
+   }
+ 
++  const firstMade = results.find((r) => r.taskId && r.taskId !== "-");
++  if (firstMade) await probeActivities(firstMade.taskId);
++
+   printTable(results, me.person.id);
+   printLedger(results);
+   printVerdict(results, me.person.id, parentSubs.ids || [], watchers.people.map((p) => p.id));
+-- 
+2.43.0
+

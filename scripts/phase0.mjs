@@ -472,6 +472,8 @@ async function cmdRead(taskId) {
   const all = await getAll("/people", {});
   const totalPeople = all.items.length;
   console.log("\n===== R3: subscribable_type probes (org has " + totalPeople + " people) =====");
+  console.log("  productiveio/api_client declares no subscription resource, only organization_subscription");
+  console.log("  (billing). So a 404 on /subscriptions is the expected answer, not a broken probe.");
   const subRows = await probeSubscribableType(taskId, totalPeople);
   for (const row of subRows) {
     console.log("  " + (row.path + " " + row.type).padEnd(28) + " " + String(row.status).padEnd(4) +
@@ -567,6 +569,29 @@ const ROWS = [
   { id: "R9", form: "both", parent: "yes", subs: ["me"], note: "precedence: flat [me] vs rel []" },
   { id: "R10", form: null, parent: "nested", subs: ["me"], note: "Q6 sub-task of a sub-task?" }
 ];
+
+// /activities is a real endpoint: productiveio/api_client declares an Activity resource. If it can
+// be filtered down to one task, we get a second, re-runnable read on who the server thinks it told,
+// instead of relying on a human checking their mail every time.
+async function probeActivities(taskId) {
+  console.log("\n===== P8b: can /activities be filtered to one task? =====");
+  const attempts = [
+    { "filter[item_id]": String(taskId), "filter[item_type]": "task" },
+    { "filter[item_id]": String(taskId) },
+    { "filter[task_id]": String(taskId) }
+  ];
+  for (const params of attempts) {
+    const qs = new URLSearchParams({ ...params, "page[size]": "20" });
+    const r = await api("GET", "/activities?" + qs.toString());
+    const items = r.status === 200 && r.doc ? (r.doc.data || []) : [];
+    console.log("  " + JSON.stringify(params) + " -> " + r.status + " n=" + items.length +
+      (r.status === 200 ? "" : "  " + errorText(r).slice(0, 80)));
+    if (items.length) {
+      console.log("    attribute keys: " + Object.keys(items[0].attributes || {}).join(", "));
+      console.log("    relationship keys: " + Object.keys(items[0].relationships || {}).join(", "));
+    }
+  }
+}
 
 async function cmdMatrix() {
   requireToken();
@@ -710,6 +735,9 @@ async function cmdMatrix() {
       row.t1 = t1.ids;
     }
   }
+
+  const firstMade = results.find((r) => r.taskId && r.taskId !== "-");
+  if (firstMade) await probeActivities(firstMade.taskId);
 
   printTable(results, me.person.id);
   printLedger(results);

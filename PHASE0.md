@@ -93,6 +93,30 @@ attributes, while two independent public clients build the same fields as JSON:A
 One of those is wrong and a 201 will not tell us which, since an unrecognized field is dropped
 silently. R9 is what makes the answer legible.
 
+## What the first-party code already tells us
+
+Productive publishes its own Ruby client at https://github.com/productiveio/api_client. It is a
+thin wrapper over [json_api_client](https://github.com/chingor13/json_api_client) with no field
+schemas, so it does not answer the subscriber question. Three things in it are still useful:
+
+1. **The flat attribute form is real.** Resources like `Invoice` and `Deal` declare associations
+   (`has_one :company`), but `Task` declares none at all. With no associations, a create through
+   that gem sends `project_id`, `task_list_id` and the rest as plain attributes. Either the API
+   accepts flat `*_id` attributes on tasks or the official client cannot create one. That is
+   inference from the gem's structure rather than from a captured request, which is why the matrix
+   still tests both forms, but it does mean the docs are not describing a form nobody uses.
+2. **There is no subscription resource.** The client lists `organization_subscription`, which is
+   billing, and nothing else subscriber-shaped. So a 404 from `/subscriptions` during the probe is
+   the expected answer, and task subscribers are most likely read through the people filter or an
+   include on the task.
+3. **`/activities` is a real endpoint.** The client declares an `Activity` resource, so the run now
+   tries three ways of filtering activities down to a single task. If one works, future re-runs get
+   a machine-readable second opinion on who the server thinks it told, instead of depending on
+   someone checking their mail.
+
+Base URL, `X-Auth-Token` and `X-Organization-Id` are all confirmed first-party by that client's
+configuration, and match what the script sends.
+
 ## Then what
 
 If any row keeps the subscriber list clean and the recipient confirms no notification, that shape
